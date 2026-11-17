@@ -27,7 +27,6 @@ class ProfileRepository:
                 profile.languages[:] = [ProfileLanguage(language_code=value) for value in values['languages'] or []]
             if 'interest_codes' in values:
                 profile.interests[:] = [ProfileInterest(interest_code=value) for value in values['interest_codes'] or []]
-            profile.onboarding_completed = bool(profile.nationality and profile.gender and profile.birth_date)
             db.flush()
             return self._response(profile)
 
@@ -132,20 +131,27 @@ class ProfileRepository:
                     introductions[(index - 1) % len(introductions)],
                 )
             )
+        browser_test_user_ids = {f'seed-demo-{index:03d}' for index in range(1, 11)}
         with SessionLocal.begin() as db:
             for user_id, *_ in records:
+                status = 'active' if user_id in browser_test_user_ids else 'seed'
                 user = db.get(User, user_id)
                 if user is None:
                     db.add(
                         User(
                             id=user_id,
-                            status='seed',
+                            status=status,
                             last_active_at=utc_now(),
                             call_notifications_enabled=True,
                             push_token=f'local-seed-token-{user_id}',
                         )
                     )
-                elif user.status == 'seed':
+                else:
+                    # Local seed identities can be deleted while exercising the
+                    # withdrawal flow. Recreate them on the next local boot.
+                    user.status = status
+                    user.deleted_at = None
+                    user.last_active_at = utc_now()
                     user.call_notifications_enabled = True
                     user.push_token = f'local-seed-token-{user_id}'
             # Profile.user_id의 FK 대상인 seed user를 먼저 DB에 반영한다.
@@ -172,14 +178,13 @@ class ProfileRepository:
             age=self._age(profile.birth_date),
             birth_date=profile.birth_date,
             timezone=profile.timezone,
-            photos=self._photos(profile),
             onboarding_completed=profile.onboarding_completed,
         )
 
     def _public(self, profile: Profile) -> PublicProfile:
         age = self._age(profile.birth_date)
         photos = self._photos(profile)
-        return PublicProfile(nickname=profile.nickname, nationality=profile.nationality, gender=profile.gender, age=age if profile.age_visible else None, age_visible=profile.age_visible, languages=[item.language_code for item in profile.languages], mbti=profile.mbti, interest_codes=[item.interest_code for item in profile.interests], introduction=profile.introduction, primary_photo=next((item for item in photos if item.is_primary), None))
+        return PublicProfile(nickname=profile.nickname, nationality=profile.nationality, gender=profile.gender, age=age if profile.age_visible else None, age_visible=profile.age_visible, languages=[item.language_code for item in profile.languages], mbti=profile.mbti, interest_codes=[item.interest_code for item in profile.interests], introduction=profile.introduction, photos=photos, primary_photo=next((item for item in photos if item.is_primary), None))
 
     @staticmethod
     def _age(birth_date: date | None) -> int | None:
@@ -190,4 +195,4 @@ class ProfileRepository:
 
     @staticmethod
     def _photos(profile: Profile) -> list[ProfilePhoto]:
-        return [ProfilePhoto(photo_id=item.id, image_url=item.image_ref, position=item.position, is_primary=item.is_primary) for item in profile.photos]
+        return [ProfilePhoto(photo_id=item.id, image_url=item.image_ref, position=item.position, is_primary=item.is_primary) for item in sorted(profile.photos, key=lambda item: item.position)]

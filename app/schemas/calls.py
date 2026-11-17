@@ -14,6 +14,7 @@ class CallRequestResponse(BaseModel):
     request_id: str
     direction: Literal["outgoing", "incoming"]
     status: Literal["pending", "accepted", "rejected", "cancelled", "expired"]
+    counterpart_id: str
     counterpart: PublicProfile
     created_at: datetime
     call_session_id: Optional[str] = None
@@ -27,20 +28,21 @@ class CallRequestListResponse(BaseModel):
 class CallSessionResponse(BaseModel):
     session_id: str
     status: Literal["connecting", "ended", "expired"]
+    peer_id: str
     peer: PublicProfile
     expires_at: datetime
     ended_at: Optional[datetime] = None
 
 
 class SignalCreateRequest(BaseModel):
-    signal_type: Literal["offer", "answer", "ice"]
+    signal_type: Literal["offer", "answer", "ice", "hangup"]
     payload: Dict[str, Any]
 
 
 class CallSignal(BaseModel):
     signal_id: str
     sender_id: str
-    signal_type: Literal["offer", "answer", "ice"]
+    signal_type: Literal["offer", "answer", "ice", "hangup"]
     payload: Dict[str, Any]
     created_at: datetime
     expires_at: datetime

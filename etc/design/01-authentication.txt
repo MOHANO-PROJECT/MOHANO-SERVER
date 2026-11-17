@@ -2,11 +2,11 @@
 ===============
 
 상태: 익명 JWT 세션과 refresh token 회전·폐기는 MySQL `users`, `refresh_sessions`에
-영속화한다. Google ID token 교환·검증을 구현했으며 LINE·Apple은 구현 전이다.
+영속화한다. Google·Apple·LINE ID token 및 Kakao access token 교환·검증을 구현했다.
 
 변경 목적
 ---------
-LINE, Google, Apple 계정을 서버에서 검증하고, MOHANO 자체 JWT 세션으로 로그인 상태를
+LINE, Google, Apple, Kakao 계정을 서버에서 검증하고, MOHANO 자체 JWT 세션으로 로그인 상태를
 안전하게 유지한다.
 
 확정한 결정
@@ -31,6 +31,21 @@ LINE, Google, Apple 계정을 서버에서 검증하고, MOHANO 자체 JWT 세�
   `provider=google`, `provider_subject=sub`으로 사용자를 조회 또는 생성한다.
 - Google email은 표시·연락 식별자가 아니라 선택적 보조 정보로만 저장한다. 계정의 고유
   식별자는 변경되지 않는 Google `sub` 값이다.
+- Apple 로그인은 앱이 보낸 Apple ID token과 일회성 nonce를 `POST /v1/auth/apple/exchange`로
+  받고, Apple JWKS의 RS256 서명, issuer `https://appleid.apple.com`, 허용된 Bundle ID/Service
+  ID audience, 만료 시각, nonce, `sub`를 검증한다. 통과한 `sub`를 `provider=apple`의 고유
+  identity로 사용하며 email은 선택 보조 정보로만 저장한다.
+- Android Apple 로그인용 `POST /v1/auth/apple/callback`은 Apple의 form POST를 앱 callback
+  activity로 전달할 뿐이다. 이 endpoint의 입력만으로 세션을 만들지 않으며, 이후
+  `/v1/auth/apple/exchange` 검증 성공 뒤에만 JWT를 발급한다.
+- LINE 로그인은 앱이 보낸 ID token과 LINE SDK가 생성한 nonce를
+  `POST /v1/auth/line/exchange`로 받는다. `LineIdentityVerifier`는 LINE의 ID token verify API에
+  token·`MOHANO_LINE_CHANNEL_ID`·nonce를 함께 보내며, 검증 응답의 `aud`, `nonce`, `sub`를 다시
+  확인한다. 앱이 보내는 LINE profile·email은 신뢰하지 않는다.
+- Kakao 로그인은 앱이 보낸 native SDK access token을 `POST /v1/auth/kakao/exchange`로 받는다.
+  `KakaoIdentityVerifier`는 Kakao `access_token_info` API에서 토큰의 유효성, 서비스 사용자 ID(`id`),
+  발급 앱 ID(`app_id`)를 확인하고 `MOHANO_KAKAO_APP_ID`와 일치할 때만 `provider=kakao` identity를
+  생성·조회한다. 클라이언트 Kakao profile/email은 신뢰하거나 저장하지 않는다.
 - 새 Google 사용자는 `users` 행을 먼저 flush한 뒤 `auth_identities`를 저장한다. 두 테이블의
   외래 키 관계를 하나의 트랜잭션으로 보장한다.
 
@@ -40,6 +55,8 @@ API와 데이터 요구사항
 - `POST /v1/auth/line/exchange`
 - `POST /v1/auth/google/exchange`
 - `POST /v1/auth/apple/exchange`
+- `POST /v1/auth/apple/callback` (Android provider callback, JWT 미발급)
+- `POST /v1/auth/kakao/exchange`
 - `POST /v1/auth/refresh`
 - `POST /v1/auth/logout`
 - users, auth_identities, refresh_sessions 테이블
@@ -47,6 +64,9 @@ API와 데이터 요구사항
 영향 파일
 ---------
 - `app/api/v1/auth.py` (Controller), `app/services/auth_service.py` (business service)
+- `app/services/apple_identity_verifier.py` (Apple JWKS ID token verifier)
+- `app/services/line_identity_verifier.py` (LINE ID token verifier)
+- `app/services/kakao_identity_verifier.py` (Kakao access token verifier)
 - `app/repositories/auth_repository.py` (MySQL repository)
 - Flutter 연동: `MOHANO-APP/etc/design/01-authentication.txt`
 
@@ -56,6 +76,15 @@ API와 데이터 요구사항
   서버용 Web OAuth client를 만들고, Web client ID를 FastAPI 환경 변수와 Flutter
   `MOHANO_GOOGLE_WEB_CLIENT_ID` dart-define에 각각 등록한다.
 - Google 로그인 뒤 익명 사용자 데이터를 계정으로 병합하는 범위를 정한다.
+- Apple Developer Program 설정: App ID capability, Android/web Service ID, HTTPS Return URL,
+  `MOHANO_APPLE_CLIENT_IDS` 환경 변수 등록을 실제 계정으로 확인한다.
+- Apple authorization code 교환 및 refresh token 기반의 daily authorization 상태 확인·철회 세션
+  처리 정책은 운영 설정과 함께 추가한다.
+- LINE Developers Console에서 native LINE Login channel, Android package/signature, iOS bundle ID를
+  실제 배포 식별자로 등록하고 `MOHANO_LINE_CHANNEL_ID`를 운영 환경에 등록한다.
+- Kakao Developers에서 Android platform package/signing key hash를 등록하고 Kakao Login을 활성화한다.
+  App ID만 `MOHANO_KAKAO_APP_ID` 서버 환경 변수에 넣으며, Admin key·REST API secret은 이 로그인 검증
+  흐름에 필요하지도 않고 저장하지 않는다.
 - Web의 Google 공식 버튼과 iOS Google URL scheme은 각 플랫폼 출시 작업에서 추가한다.
 - 익명 사용자 생성과 소셜 계정 연결 시 데이터 병합 범위를 정한다.
 - access/refresh JWT 만료 시간, signing key 교체 정책, 계정 삭제 유예 기간을 정한다.

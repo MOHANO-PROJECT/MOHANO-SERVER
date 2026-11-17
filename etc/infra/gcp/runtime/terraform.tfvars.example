@@ -1,0 +1,19 @@
+# Copy this to terraform.tfvars. It contains identifiers only; secret values
+# belong in Secret Manager and must not be written here.
+project_id                       = "mohano-512515"
+region                           = "asia-northeast1"
+environment                      = "dev"
+container_image                  = "asia-northeast1-docker.pkg.dev/mohano-512515/mohano-api-dev/api:replace-me"
+cloud_sql_connection_name        = "mohano-512515:asia-northeast1:mohano-mysql-dev"
+runtime_service_account_email    = "mohano-api-dev@mohano-512515.iam.gserviceaccount.com"
+vpc_network                      = "mohano-private-net-dev"
+vpc_subnetwork                   = "mohano-run-subnet-dev"
+# Leave empty while validating the dev GCP deployment without Cloudflare R2.
+r2_endpoint                      = ""
+r2_bucket                        = null
+cors_origins_raw                 = "https://app.example.com"
+cors_origin_regex                = ""
+google_web_client_id             = "replace-with-google-web-client-id.apps.googleusercontent.com"
+apple_client_ids                 = "com.example.mohano,com.example.mohano.web"
+line_channel_id                  = "replace-with-line-channel-id"
+kakao_app_id                     = "replace-with-kakao-app-id"

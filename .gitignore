@@ -5,3 +5,10 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 *.egg-info/
+# Terraform working directories, state and local deployment variables must
+# never be committed. Production secrets live in Secret Manager instead.
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.tfvars.json

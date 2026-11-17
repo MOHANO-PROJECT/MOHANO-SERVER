@@ -25,6 +25,28 @@ class AuthRepository:
             session.add(user)
             return user.id
 
+    def seed_local_test_identities(self) -> None:
+        """Attach fixed local-browser logins to the first ten seed profiles."""
+        with SessionLocal.begin() as session:
+            for index in range(1, 11):
+                username = f"web{index:02d}"
+                user_id = f"seed-demo-{index:03d}"
+                identity = session.scalar(
+                    select(AuthIdentity).where(
+                        AuthIdentity.provider == "local_test",
+                        AuthIdentity.provider_subject == username,
+                    )
+                )
+                if identity is None:
+                    session.add(
+                        AuthIdentity(
+                            user_id=user_id,
+                            provider="local_test",
+                            provider_subject=username,
+                            provider_email=None,
+                        )
+                    )
+
     def get_or_create_identity(
         self,
         *,
@@ -69,14 +91,14 @@ class AuthRepository:
             if identity is None:
                 return None
             user = session.get(User, identity.user_id)
-            if user is None or user.status != "active":
+            if user is None or user.status not in ("active", "seed"):
                 return None
             return IdentityLogin(user_id=identity.user_id, is_new_user=False)
 
     def user_exists(self, user_id: str) -> bool:
         with SessionLocal() as session:
             return session.scalar(
-                select(User.id).where(User.id == user_id, User.status == "active")
+                select(User.id).where(User.id == user_id, User.status.in_(("active", "seed")))
             ) is not None
 
     def onboarding_completed(self, user_id: str) -> bool:

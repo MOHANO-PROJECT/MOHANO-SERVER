@@ -6,13 +6,58 @@ MOHANO 앱의 인증, 프로필, 매칭, 채팅, P2P 음성 통화 signaling을 
 ## 현재 범위
 
 - `GET /v1/health`
-- 익명 사용자 생성과 access/refresh JWT 발급·갱신·로그아웃
+- Swagger UI: `/v1/docs`, OpenAPI schema: `/v1/openapi.json`, ReDoc: `/v1/redoc`.
+  Local docs are open; dev/staging require HTTP Basic Auth (`mohano-admin` plus the
+  generated Secret Manager password); production docs are disabled.
+- Google·Apple·LINE identity token 및 Kakao access token 검증과 access/refresh JWT 발급·갱신·로그아웃
 - 프로필 텍스트·사진 참조값은 MySQL에 저장되며, 사진 원본은 private S3 호환 object storage에 둔다.
 - 매칭 조건·후보, 통화 신청·P2P signaling, REST 채팅·읽음 API
-- 매칭·통화·채팅 데이터는 개발용 `MockStore`에만 저장된다. FastAPI를 재시작하면 사라진다.
+- 매칭·채팅·통화 신청·P2P signaling 상태는 MySQL에 저장된다. 음성 자체는 WebRTC P2P로 기기 간에 직접 전달한다.
 
-LINE·Apple credential 검증과 매칭·통화·채팅 MySQL repository는 기능별 설계 문서에 따라
-다음 단계에서 구현한다.
+Android FCM은 Firebase Console 설정과 service-account credential이 준비된 환경에서 통화 신청·새
+메시지를 발송한다. 오디오와 메시지 본문은 FCM payload에 넣지 않으며, 앱은 알림 이벤트 뒤 보호된
+API를 다시 조회한다.
+
+로컬 개발은 service-account key 대신 Google Cloud Application Default Credentials(ADC)를 사용할 수
+있다. `gcloud auth application-default login` 뒤 `.env`에 `MOHANO_FCM_ENABLED=true`와
+`MOHANO_FIREBASE_PROJECT_ID=mohano-512515`를 설정한다. 운영 환경에서는 key JSON보다 실행 환경에
+부착된 service account 또는 Workload Identity를 우선한다.
+
+### Apple 로그인 환경 변수
+
+Apple 로그인은 앱이 전달한 ID token을 Apple 공개 키로 검증한 뒤 MOHANO JWT로 교환한다. `.env`에는
+iOS Bundle ID와 Android/web Service ID를 모두 등록한다.
+
+```dotenv
+MOHANO_APPLE_CLIENT_IDS=com.example.mohano,com.example.mohano.web
+MOHANO_APPLE_ANDROID_PACKAGE_ID=com.example.mohano
+```
+
+Android Apple 로그인은 외부 HTTPS callback URL을 필요로 한다. Apple Developer portal의 Return URL과
+Flutter `MOHANO_APPLE_REDIRECT_URI`에는 같은 주소(예: `https://api.example.com/v1/auth/apple/callback`)를
+등록한다. `POST /v1/auth/apple/callback`은 Android 앱으로 provider 결과를 되돌려 주며, 로그인 여부는
+그 뒤 `POST /v1/auth/apple/exchange`의 Apple ID token 검증 결과로만 결정한다.
+
+### LINE 로그인 환경 변수
+
+LINE native SDK가 보낸 ID token은 `POST /v1/auth/line/exchange`로 전달된다. 서버는
+`https://api.line.me/oauth2/v2.1/verify`에서 Channel ID와 nonce를 포함해 검증한 뒤, 검증 응답의
+`sub`만 identity 키로 사용한다. Channel secret은 이 흐름에 사용하지 않는다.
+
+```dotenv
+MOHANO_LINE_CHANNEL_ID=1234567890
+```
+
+### Kakao 로그인 환경 변수
+
+Kakao native SDK가 발급한 access token은 `POST /v1/auth/kakao/exchange`로 전달된다. 서버는
+Kakao의 token-info API에서 토큰 유효성과 발급 앱 ID를 직접 확인한 뒤, 검증된 Kakao 사용자 ID만
+identity 키로 사용한다. REST API key나 Admin key는 이 로그인 검증에 사용하지 않는다.
+
+```dotenv
+# Kakao Developers > My Application > App settings > App ID
+MOHANO_KAKAO_APP_ID=123456
+```
 
 ## 실행 준비
 
@@ -31,6 +76,16 @@ MySQL은 기본적으로 `127.0.0.1:3306`에만 열리며, FastAPI는 로컬 Pyt
 Silo는 MinIO 호환 로컬 사진 저장소다. FastAPI는 짧게 만료되는 signed PUT/GET URL만 발급하고,
 앱은 장기 storage 자격 증명 없이 사진을 직접 업로드·조회한다. 운영에서는 같은 S3 호환 계약을
 Cloudflare R2로 전환한다.
+
+### GCP 운영 배포
+
+운영 환경은 **Cloud Run(FastAPI 컨테이너) + Cloud SQL for MySQL + Cloudflare R2**를 사용한다.
+Cloud Run이 HTTPS와 컨테이너 실행을 담당하므로 Caddy나 공개 VM은 사용하지 않는다. Cloud SQL과
+Cloud Run은 Unix socket/Cloud SQL connector로만 통신하며, R2 자격 증명은 Secret Manager 참조로
+주입한다. 개발 환경은 운영자 요청에 따라 DB URL·JWT·Swagger Basic Auth 값을 Cloud Run 리비전 설정에
+표시할 수 있으므로, 해당 환경의 Terraform state와 Cloud Run 설정 접근 권한을 제한한다. Terraform 분리
+스택, Secret Manager 등록, 이미지 빌드, migration job 실행 순서는
+[GCP 운영 인프라 안내](etc/infra/gcp/README.md)를 따른다.
 
 ### FastAPI
 

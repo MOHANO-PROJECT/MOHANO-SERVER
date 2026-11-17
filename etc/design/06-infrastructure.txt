@@ -1,7 +1,8 @@
 로컬 MySQL·Silo Docker 구성
 ===========================
 
-상태: Docker 구성 파일을 만들었다. 이미지 빌드와 컨테이너 기동은 아직 사용자가 수행하지 않았다.
+상태: 로컬 Docker(MySQL·Silo) 구성은 개발 전용으로 유지한다. 운영 기준은 Cloud Run(FastAPI
+컨테이너) + Cloud SQL for MySQL + Cloudflare R2로 확정했고, Terraform과 배포 절차를 추가했다.
 
 변경 목적
 ---------
@@ -10,8 +11,8 @@
 
 확정한 결정
 ------------
-- 구성 파일은 `etc/infra`에 둔다. FastAPI 애플리케이션 컨테이너는 아직 만들지 않는다.
-- MySQL 8.4 LTS 이미지를 기반으로 한다.
+- 로컬 구성 파일은 `etc/infra`에 둔다.
+- MySQL 9.7 이미지를 기반으로 한다.
 - Docker Compose 프로젝트 이름은 `mohano`, MySQL 컨테이너와 로컬 이미지 이름은
   `mohano-db`로 고정한다.
 - 포트는 기본적으로 `127.0.0.1:3306`에만 열어 외부 네트워크에 노출하지 않는다.
@@ -37,6 +38,66 @@
 - Flutter Web 로컬 개발은 임의 포트를 사용할 수 있으므로 `localhost`와 `127.0.0.1`의 모든
   로컬 포트만 허용하는 CORS origin regex를 기본값으로 둔다. 운영에서는 명시 origin으로
   제한한다.
+- 운영 API는 Cloud Run의 FastAPI 컨테이너로 실행한다. Cloud Run이 HTTPS를 종료하므로 Caddy,
+  공개 VM, production docker-compose는 사용하지 않는다. Android/iOS 클라이언트가 Google IAM
+  credential을 보낼 수 없으므로 Cloud Run Invoker IAM 검사를 끄는 방식으로 공개 진입점을
+  유지하고, `allUsers` IAM 바인딩은 사용하지 않는다. 조직의 도메인 제한 정책과 충돌하지 않으며,
+  실제 리소스 보호는 FastAPI JWT 인증이 담당한다.
+- Swagger/OpenAPI는 `/v1/docs`, `/v1/openapi.json`, `/v1/redoc`으로 제공한다. local은 개발 편의를
+  위해 공개하고, dev/staging은 Bootstrap이 생성한 10자리 Basic Auth 비밀번호를 사용한다. prod는 문서
+  route 자체를 비활성화한다. 운영자 확인 요구에 따라 dev의 Basic Auth 사용자명·비밀번호는 Cloud Run
+  revision YAML의 일반 환경변수로 표시하고, staging은 Secret Manager 참조를 유지한다.
+- 개발 DB는 같은 Tokyo 리전(`asia-northeast1`)의 Cloud SQL MySQL 9.7을 사용한다. 현재 개발환경은
+  `environment=dev` suffix를 사용하고, 최소 `db-f1-micro`, 단일 영역, HA 미사용, 10 GB HDD와
+  백업 비활성으로 시작한다. 이 등급은 SLA가
+  없고 백업이 없으므로 외부 사용자 초대 전에는 SSD·백업 정책을 다시 검토해야 한다.
+- Cloud Run은 `min instances=0`, `max instances=1`, container concurrency 20으로 시작한다.
+  FastAPI SQLAlchemy pool은 instance당 pool 3 + overflow 1로 제한해 작은 Cloud SQL 인스턴스의
+  idle connection 고갈을 막는다.
+- Cloud SQL은 Private IP만 사용한다. Cloud Run과 migration job은 Direct VPC Egress의 전용 subnet을
+  통해 Cloud SQL connector가 제공하는 `/cloudsql/<connection-name>` Unix socket으로 통신한다.
+  별도 Serverless VPC Access connector instance는 만들지 않는다. DB를 외부 authorized network에
+  열지 않는다. dev의 DB URL은 운영자 확인을 위해 Cloud Run service와 migration job revision YAML에
+  일반 환경변수로 표시하며, staging/prod는 Secret Manager 참조를 유지한다.
+- object storage는 환경별 Cloudflare R2 private bucket(`mohano-storage-{environment}`)을
+  사용한다. R2 endpoint·access key·secret은 Cloud Run 환경에 Secret Manager 참조로만 주입한다.
+  단, `dev` 인프라 검증 단계에서는 R2 endpoint를 비워 object storage 환경변수와 secret 참조를
+  생략할 수 있다. `staging`·`prod`에서는 R2 설정을 필수로 한다.
+- Terraform은 `etc/infra/gcp/bootstrap`(Cloud SQL·Artifact Registry·runtime IAM·secret container)과
+  `etc/infra/gcp/runtime`(Cloud Run service·migration job)으로 나눈다. 초기 환경 구성에서는
+  Bootstrap Terraform이 `mohano_app` Cloud SQL 사용자와 DB URL·JWT Secret의 첫 버전을 생성한다.
+  생성된 민감 값이 Terraform state에 남을 수 있으므로 state bucket을 비공개로 유지한다. dev runtime은
+  Cloud Run revision YAML 표시를 위해 DB URL·JWT·Swagger Basic Auth 네 Secret version을 읽으므로
+  dev deployer에도 해당 네 Secret의 accessor 권한을 부여한다. R2 credential Secret version은
+  Cloudflare 구성 이후 별도로 주입하며 revision YAML에는 Secret Manager 참조로만 남긴다.
+- migration은 FastAPI 컨테이너 이미지에 포함된 Alembic을 Cloud Run Job으로 실행한다. API revision을
+  바꾼 뒤 migration job 성공, `/v1/health` 확인 순서를 운영 절차로 둔다.
+- GitHub Actions는 `badara-server`와 같은 Workload Identity Federation(OIDC) 방식으로 GCP에
+  단기 credential을 받아 배포한다. GitHub에는 service account key JSON이나 R2/DB/JWT secret을
+  저장하지 않는다. `dev` branch는 dev deploy service account, `staging` branch는 staging deploy
+  service account, `main` branch는 prod deploy service account만 impersonate할 수 있다.
+- `.github/workflows/deploy.yml`은 `dev`, `staging`, `main` branch push에서 각각 dev, staging,
+  prod를 자동 배포한다. prod는 GitHub Environment의 승인 job에서 검증·Bootstrap·이미지 build 전에
+  먼저 대기한다. 승인 뒤 workflow는 검증, Bootstrap Terraform apply, migration, API revision 배포를
+  순서대로 실행한다.
+- 별도의 `.github/workflows/bootstrap.yml`은 사용하지 않는다. 최초 WIF 순환을 끊기 위해 Bootstrap
+  전용 관리자 WIF provider와 서비스 계정은 Terraform 외부에서 한 번 생성하며, 그 뒤에는 통합 deploy
+  workflow의 Bootstrap job이 모든 환경의 Terraform apply를 담당한다.
+- GitHub에는 project/region/state bucket과 최초 Bootstrap WIF 값만 공통으로 둔다. 환경별
+  deploy WIF provider와 deploy service account는 GitHub 변수에 저장하지 않는다. Deploy workflow가
+  Bootstrap WIF로 선택한 환경의 Terraform state를 읽어 해당 WIF provider, deploy service account,
+  Cloud SQL connection name, runtime service account, VPC/subnet을 동적으로 다음 배포 job에 주입한다.
+  R2 endpoint·OAuth·CORS 같은 외부 설정만 환경별 Actions Variables에 둔다.
+- pull request와 `dev`/`staging`/`main` push는 Python compile/test·Terraform format 검사를 한다. 배포는
+  SHA tag 이미지 push → migration job 이미지만 Terraform target apply → migration job 실행 →
+  API service Terraform apply → health check 순서다. migration 실패 시 새 API revision으로 traffic을
+  옮기지 않는다.
+- GitHub Actions의 Python 검증은 `MOHANO_ENVIRONMENT=ci`로 실행해 로컬 개발용 100명 시드와
+  로컬 MySQL 연결을 사용하지 않는다. DB가 필요한 통합 테스트는 별도 테스트 데이터베이스 단계를
+  추가한 뒤 분리한다.
+- Terraform state는 GCS `mohano-terraform-state` bucket의
+  `mohano/{environment}/bootstrap`, `mohano/{environment}/runtime` prefix에 분리한다.
+  이 bucket은 최초 Terraform init 전 gcloud로 생성하고 versioning을 켠다.
 
 사용 방법
 ---------
@@ -56,11 +117,22 @@
 - app/main.py
 - alembic/versions/20261023_0001_initial_auth.py
 - alembic/versions/20261023_0002_app_data.py
+- Dockerfile
+- .dockerignore
+- etc/infra/gcp/bootstrap/*
+- etc/infra/gcp/runtime/*
+- etc/infra/gcp/README.md
 
 다음 작업 또는 미결정 사항
 ----------------------------
-- 운영 환경의 MySQL 백업, 모니터링, 비밀 값 관리, 외부 네트워크 접근 정책은 별도 설계한다.
-- FastAPI 컨테이너화와 production compose 구성은 로컬 개발 확인 후 결정한다.
-- Cloudflare R2 버킷·lifecycle·custom domain은 운영 인프라 Terraform에서 별도 관리한다.
+- GCP billing budget, Cloud SQL CPU/connection/storage, Cloud Run 오류율과 Secret Manager 접근을
+  알림으로 설정한다.
+- GitHub `dev`, `staging`, `prod` Environment별 외부 설정 Variables를 등록한다. 환경별 deploy WIF
+  provider와 service account는 Terraform output으로 동적으로 전달한다. `dev` → dev,
+  `staging` → staging, `main` → prod push가 통합 workflow에서 자동 배포하며, prod는 승인 규칙을
+  적용한다. 세 환경은 각각 별도 state prefix와 environment-suffixed 리소스를 사용한다.
+- R2 bucket CORS, lifecycle, staging object 만료 및 custom domain은 Cloudflare에서 별도 확정한다.
+- 공개 API domain/DNS, OAuth redirect URL 및 운영 CORS origin은 도메인 결정 뒤 적용한다.
+- Cloud SQL db-f1-micro의 부하·SLA 한계를 넘기기 전에 DB tier 및 HA 전환 기준을 정한다.
 - staging object 만료 lifecycle, 썸네일/리사이징, EXIF 제거·콘텐츠 심사, 삭제 실패 object의
   재시도 정리는 운영 전 확정한다.

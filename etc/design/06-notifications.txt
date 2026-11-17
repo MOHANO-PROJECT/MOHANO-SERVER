@@ -24,5 +24,13 @@ API
 - MySQL users에 `last_active_at`, `call_notifications_enabled`, `push_token`을 저장한다.
 - 매칭 후보 조회와 통화 신청 생성 모두 같은 가용성 조건을 검사한다.
 - Flutter 앱은 home 상태에서 foreground heartbeat를 전송한다.
-- FCM/APNs 실제 발송, platform permission 요청, token 갱신/폐기는 Firebase 프로젝트와 iOS/Android
-  provider 설정이 준비되는 다음 단계에서 연결한다. token은 로그·공개 API 응답에 포함하지 않는다.
+- Android FCM은 Flutter가 OS 권한 허용 뒤 token을 등록·갱신·로그아웃 해제하고, 서버는 통화 신청과
+  새 채팅 메시지에 event type과 opaque ID만 발송하도록 연결했다. 실패한 unregistered token은 서버가
+  자동 해제한다. 통화 신청 알림은 서버 요청과 같은 14초 TTL을 설정해 만료된 초대가 나중에 표시되지
+  않게 한다. 앱 언어(`en`·`ja`·`ko`)도 token과 함께 저장해 수신자 언어에 맞는 알림 문구를 보낸다.
+  Android는 통화 초대용 `IMPORTANCE_HIGH` 채널과 메시지용 기본 중요도 채널을 분리해, 통화 초대는
+  헤드업 알림으로 표시할 수 있게 한다. token은 로그·공개 API 응답에 포함하지 않는다.
+- Firebase Console Android 설정, `google-services.json`, FlutterFire `firebase_options.dart`, ADC 기반
+  서버 발송과 Android 실기기 알림 수신은 확인했다. 운영 환경의 credential 배포 방식, 여러 기기 token
+  저장, 전달 실패/지연 모니터링은 남아 있다. iOS APNs provider 설정은 Apple Developer Program 준비 뒤
+  별도 연결한다.

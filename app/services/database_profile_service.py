@@ -63,14 +63,6 @@ class DatabaseProfileService:
         return self._with_photo_urls(self._repository.public(user_id))
 
     def _with_photo_urls(self, profile: ProfileResponse | PublicProfile) -> ProfileResponse | PublicProfile:
-        if isinstance(profile, PublicProfile) and not isinstance(profile, ProfileResponse):
-            primary = profile.primary_photo
-            if primary is None:
-                return profile
-            return profile.model_copy(
-                update={'primary_photo': primary.model_copy(update={'image_url': self._storage.download_url(primary.image_url)})},
-            )
-
         photos = [photo.model_copy(update={'image_url': self._storage.download_url(photo.image_url)}) for photo in profile.photos]
         primary = next((photo for photo in photos if photo.is_primary), None)
         return profile.model_copy(update={'photos': photos, 'primary_photo': primary})

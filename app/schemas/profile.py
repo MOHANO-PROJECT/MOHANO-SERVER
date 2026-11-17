@@ -1,7 +1,9 @@
 from datetime import date
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.age_policy import MINIMUM_SERVICE_AGE, age_on
 
 
 class ProfilePhoto(BaseModel):
@@ -21,6 +23,7 @@ class PublicProfile(BaseModel):
     mbti: Optional[str] = None
     interest_codes: List[str] = Field(default_factory=list)
     introduction: Optional[str] = None
+    photos: List[ProfilePhoto] = Field(default_factory=list)
     primary_photo: Optional[ProfilePhoto] = None
 
 
@@ -28,7 +31,6 @@ class ProfileResponse(PublicProfile):
     user_id: str
     birth_date: Optional[date] = None
     timezone: Optional[str] = None
-    photos: List[ProfilePhoto] = Field(default_factory=list)
     onboarding_completed: bool = False
 
 
@@ -43,6 +45,15 @@ class ProfileUpdateRequest(BaseModel):
     mbti: Optional[str] = Field(default=None, pattern=r"^(INTJ|INTP|ENTJ|ENTP|INFJ|INFP|ENFJ|ENFP|ISTJ|ISFJ|ESTJ|ESFJ|ISTP|ISFP|ESTP|ESFP)$")
     interest_codes: Optional[List[str]] = Field(default=None, min_length=3, max_length=5)
     introduction: Optional[str] = Field(default=None, max_length=180)
+
+    @field_validator("birth_date")
+    @classmethod
+    def validate_minimum_service_age(cls, value: Optional[date]) -> Optional[date]:
+        if value is not None and age_on(value) < MINIMUM_SERVICE_AGE:
+            raise ValueError(
+                f"You must be at least {MINIMUM_SERVICE_AGE} years old to use Mohano."
+            )
+        return value
 
 
 class ProfilePhotoCreateRequest(BaseModel):

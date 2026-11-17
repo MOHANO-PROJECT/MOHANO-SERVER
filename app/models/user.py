@@ -14,9 +14,15 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
+    restricted_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     last_active_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     call_notifications_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     push_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notification_locale: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="en"
+    )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

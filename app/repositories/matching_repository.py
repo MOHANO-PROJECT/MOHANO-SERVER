@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.core.security import utc_now
 from app.db.session import SessionLocal
@@ -47,6 +47,7 @@ class MatchingRepository:
                     Profile.user_id != user_id,
                     Profile.onboarding_completed.is_(True),
                     User.status.in_(("active", "seed")),
+                    or_(User.restricted_until.is_(None), User.restricted_until <= utc_now()),
                     AvailabilityRepository.contactable_clause(),
                 )
             )
@@ -100,6 +101,7 @@ class MatchingRepository:
                     Profile.user_id != viewer_id,
                     Profile.onboarding_completed.is_(True),
                     User.status.in_(("active", "seed")),
+                    or_(User.restricted_until.is_(None), User.restricted_until <= utc_now()),
                     AvailabilityRepository.contactable_clause(),
                 )
             )

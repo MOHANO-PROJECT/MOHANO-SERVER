@@ -17,6 +17,7 @@ class ChatMessage(BaseModel):
 
 class ChatListItem(BaseModel):
     chat_id: str
+    counterpart_id: str
     counterpart: PublicProfile
     last_message: Optional[str] = None
     last_message_at: Optional[datetime] = None

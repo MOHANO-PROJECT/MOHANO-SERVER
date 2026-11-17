@@ -16,6 +16,9 @@ dependencies = [
   "google-auth[requests]>=2.35,<3.0",
   "boto3>=1.35,<2.0",
   "pydantic-settings>=2.6,<3.0",
+  # Official Firebase Admin SDK (Apache-2.0). It sends FCM only from the
+  # server; service-account credentials remain outside this repository.
+  "firebase-admin>=6.6,<8.0",
 ]
 
 [project.optional-dependencies]

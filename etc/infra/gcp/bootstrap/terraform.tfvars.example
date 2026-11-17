@@ -1,0 +1,10 @@
+# Never put actual passwords, JWT keys or Cloudflare R2 keys in this file.
+project_id = "mohano-512515"
+region     = "asia-northeast1"
+environment = "dev"
+
+# Keep true after real user data exists. Set false only for a disposable
+# sandbox before the first apply.
+deletion_protection = true
+terraform_state_bucket = "mohano-terraform-state"
+github_repository      = "MOHANO-PROJECT/MOHANO-SERVER"

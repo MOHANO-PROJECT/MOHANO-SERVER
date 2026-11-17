@@ -1,0 +1,233 @@
+name: Deploy MOHANO API
+
+on:
+  push:
+    branches:
+      - dev
+      - staging
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: mohano-${{ github.ref_name }}-deploy
+  cancel-in-progress: false
+
+jobs:
+  resolve_target:
+    name: Resolve deployment environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.target.outputs.environment }}
+    steps:
+      - id: target
+        shell: bash
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            dev|staging)
+              echo "environment=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+              ;;
+            main)
+              echo "environment=prod" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Deployments are only supported from dev, staging, or main."
+              exit 1
+              ;;
+          esac
+
+  approve_deployment:
+    name: Approve deployment
+    needs: resolve_target
+    runs-on: ubuntu-latest
+    # GitHub Environment protection rules are evaluated before this job's
+    # first step. Configure required reviewers on the prod Environment to
+    # pause the complete pipeline before verification or Terraform begins.
+    environment:
+      name: ${{ needs.resolve_target.outputs.environment }}
+    steps:
+      - name: Confirm approved deployment target
+        run: echo "Deployment approved for ${{ needs.resolve_target.outputs.environment }}."
+
+  verify:
+    name: Verify before deployment
+    needs: [resolve_target, approve_deployment]
+    runs-on: ubuntu-latest
+    env:
+      # Deployment verification does not need the local demo seed database.
+      MOHANO_ENVIRONMENT: ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Compile application modules
+        run: python -m compileall -q app alembic
+
+      - name: Run tests
+        run: pytest
+
+  bootstrap:
+    name: Bootstrap infrastructure
+    needs: [resolve_target, verify]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.resolve_target.outputs.environment }}
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      TERRAFORM_STATE_BUCKET: ${{ vars.GCP_TERRAFORM_STATE_BUCKET }}
+      MOHANO_ENVIRONMENT: ${{ needs.resolve_target.outputs.environment }}
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_VAR_environment: ${{ needs.resolve_target.outputs.environment }}
+      TF_VAR_terraform_state_bucket: ${{ vars.GCP_TERRAFORM_STATE_BUCKET }}
+      TF_VAR_github_repository: ${{ github.repository }}
+
+    outputs:
+      workload_identity_provider: ${{ steps.bootstrap_outputs.outputs.workload_identity_provider }}
+      github_deployer_service_account: ${{ steps.bootstrap_outputs.outputs.github_deployer_service_account }}
+      cloud_sql_connection_name: ${{ steps.bootstrap_outputs.outputs.cloud_sql_connection_name }}
+      runtime_service_account_email: ${{ steps.bootstrap_outputs.outputs.runtime_service_account_email }}
+      vpc_network: ${{ steps.bootstrap_outputs.outputs.vpc_network }}
+      vpc_subnetwork: ${{ steps.bootstrap_outputs.outputs.vpc_subnetwork }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud with Bootstrap WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_BOOTSTRAP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_BOOTSTRAP_SERVICE_ACCOUNT }}
+          export_environment_variables: true
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Initialize Bootstrap state
+        working-directory: etc/infra/gcp/bootstrap
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${TERRAFORM_STATE_BUCKET}" \
+            -backend-config="prefix=mohano/${MOHANO_ENVIRONMENT}/bootstrap"
+
+      - name: Terraform plan
+        working-directory: etc/infra/gcp/bootstrap
+        run: terraform plan -input=false -out=bootstrap.tfplan
+
+      - name: Terraform apply
+        working-directory: etc/infra/gcp/bootstrap
+        run: terraform apply -input=false -auto-approve bootstrap.tfplan
+
+      - name: Read Bootstrap Terraform outputs
+        id: bootstrap_outputs
+        working-directory: etc/infra/gcp/bootstrap
+        run: |
+          echo "workload_identity_provider=$(terraform output -raw github_workload_identity_provider)" >> "$GITHUB_OUTPUT"
+          echo "github_deployer_service_account=$(terraform output -raw github_deployer_service_account_email)" >> "$GITHUB_OUTPUT"
+          echo "cloud_sql_connection_name=$(terraform output -raw cloud_sql_connection_name)" >> "$GITHUB_OUTPUT"
+          echo "runtime_service_account_email=$(terraform output -raw runtime_service_account_email)" >> "$GITHUB_OUTPUT"
+          echo "vpc_network=$(terraform output -raw cloud_run_vpc_network)" >> "$GITHUB_OUTPUT"
+          echo "vpc_subnetwork=$(terraform output -raw cloud_run_vpc_subnetwork)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Build, migrate, and deploy
+    needs: [resolve_target, bootstrap]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.resolve_target.outputs.environment }}
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      MOHANO_ENVIRONMENT: ${{ needs.resolve_target.outputs.environment }}
+      TERRAFORM_STATE_BUCKET: ${{ vars.GCP_TERRAFORM_STATE_BUCKET }}
+      R2_ENDPOINT: ${{ vars.MOHANO_R2_ENDPOINT }}
+      CORS_ORIGINS_RAW: ${{ vars.MOHANO_CORS_ORIGINS_RAW }}
+      CORS_ORIGIN_REGEX: ${{ vars.MOHANO_CORS_ORIGIN_REGEX }}
+      GOOGLE_WEB_CLIENT_ID: ${{ vars.MOHANO_GOOGLE_WEB_CLIENT_ID }}
+      APPLE_CLIENT_IDS: ${{ vars.MOHANO_APPLE_CLIENT_IDS }}
+      LINE_CHANNEL_ID: ${{ vars.MOHANO_LINE_CHANNEL_ID }}
+      KAKAO_APP_ID: ${{ vars.MOHANO_KAKAO_APP_ID }}
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_VAR_environment: ${{ needs.resolve_target.outputs.environment }}
+      TF_VAR_r2_endpoint: ${{ vars.MOHANO_R2_ENDPOINT }}
+      TF_VAR_cloud_sql_connection_name: ${{ needs.bootstrap.outputs.cloud_sql_connection_name }}
+      TF_VAR_runtime_service_account_email: ${{ needs.bootstrap.outputs.runtime_service_account_email }}
+      TF_VAR_vpc_network: ${{ needs.bootstrap.outputs.vpc_network }}
+      TF_VAR_vpc_subnetwork: ${{ needs.bootstrap.outputs.vpc_subnetwork }}
+      TF_VAR_cors_origins_raw: ${{ vars.MOHANO_CORS_ORIGINS_RAW }}
+      TF_VAR_cors_origin_regex: ${{ vars.MOHANO_CORS_ORIGIN_REGEX }}
+      TF_VAR_google_web_client_id: ${{ vars.MOHANO_GOOGLE_WEB_CLIENT_ID }}
+      TF_VAR_apple_client_ids: ${{ vars.MOHANO_APPLE_CLIENT_IDS }}
+      TF_VAR_line_channel_id: ${{ vars.MOHANO_LINE_CHANNEL_ID }}
+      TF_VAR_kakao_app_id: ${{ vars.MOHANO_KAKAO_APP_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ needs.bootstrap.outputs.workload_identity_provider }}
+          service_account: ${{ needs.bootstrap.outputs.github_deployer_service_account }}
+          export_environment_variables: true
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Artifact Registry Docker authentication
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push immutable image
+        env:
+          IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/mohano-api-${{ needs.resolve_target.outputs.environment }}/api:${{ github.sha }}
+        run: |
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "TF_VAR_container_image=$IMAGE" >> "$GITHUB_ENV"
+          docker build --pull --tag "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Deploy migration job revision only
+        working-directory: etc/infra/gcp/runtime
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${TERRAFORM_STATE_BUCKET}" \
+            -backend-config="prefix=mohano/${MOHANO_ENVIRONMENT}/runtime"
+          terraform untaint google_cloud_run_v2_job.migrate || true
+          terraform apply -input=false -auto-approve \
+            -target=google_cloud_run_v2_job.migrate
+
+      - name: Run database migrations before API traffic changes
+        run: |
+          gcloud run jobs execute "mohano-migrate-${MOHANO_ENVIRONMENT}" \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
+            --wait
+
+      - name: Deploy API revision after successful migration
+        working-directory: etc/infra/gcp/runtime
+        run: terraform apply -input=false -auto-approve
+
+      - name: Verify deployed health endpoint
+        working-directory: etc/infra/gcp/runtime
+        run: |
+          api_url="$(terraform output -raw api_url)"
+          curl --fail --retry 5 --retry-all-errors --retry-delay 3 "$api_url/v1/health"

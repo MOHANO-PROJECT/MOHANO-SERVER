@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -10,3 +12,4 @@ class AvailabilityResponse(BaseModel):
 class AvailabilityUpdateRequest(BaseModel):
     call_notifications_enabled: bool
     push_token: str | None = Field(default=None, max_length=4096)
+    notification_locale: Literal["en", "ja", "ko"] = "en"

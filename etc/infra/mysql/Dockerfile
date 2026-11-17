@@ -1,3 +1,3 @@
-FROM mysql:8.4
+FROM mysql:9.7
 
 COPY conf.d/mohano.cnf /etc/mysql/conf.d/mohano.cnf
