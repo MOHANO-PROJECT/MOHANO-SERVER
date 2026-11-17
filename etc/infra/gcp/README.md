@@ -136,9 +136,10 @@ password from Secret Manager and writes them as ordinary environment-variable
 values in the Cloud Run service revision; the migration job receives the same
 plain DB URL. Staging continues to use `secretKeyRef` and production does not
 register the documentation routes at all. The dev deployer is granted Secret
-Accessor only for those four values. Retrieve a non-production password from the
-selected Bootstrap state with `terraform output -raw docs_basic_auth_password`
-or directly from Secret Manager when needed:
+Accessor and Secret Manager Viewer only for those four values. Retrieve a
+non-production password from the selected Bootstrap state with
+`terraform output -raw docs_basic_auth_password` or directly from Secret
+Manager when needed:
 
 ```powershell
 gcloud secrets versions access latest `

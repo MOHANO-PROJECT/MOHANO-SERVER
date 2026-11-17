@@ -68,8 +68,8 @@
   Bootstrap Terraform이 `mohano_app` Cloud SQL 사용자와 DB URL·JWT Secret의 첫 버전을 생성한다.
   생성된 민감 값이 Terraform state에 남을 수 있으므로 state bucket을 비공개로 유지한다. dev runtime은
   Cloud Run revision YAML 표시를 위해 DB URL·JWT·Swagger Basic Auth 네 Secret version을 읽으므로
-  dev deployer에도 해당 네 Secret의 accessor 권한을 부여한다. R2 credential Secret version은
-  Cloudflare 구성 이후 별도로 주입하며 revision YAML에는 Secret Manager 참조로만 남긴다.
+  dev deployer에도 해당 네 Secret의 accessor와 version metadata viewer 권한을 부여한다. R2 credential
+  Secret version은 Cloudflare 구성 이후 별도로 주입하며 revision YAML에는 Secret Manager 참조로만 남긴다.
 - migration은 FastAPI 컨테이너 이미지에 포함된 Alembic을 Cloud Run Job으로 실행한다. API revision을
   바꾼 뒤 migration job 성공, `/v1/health` 확인 순서를 운영 절차로 둔다.
 - GitHub Actions는 `badara-server`와 같은 Workload Identity Federation(OIDC) 방식으로 GCP에

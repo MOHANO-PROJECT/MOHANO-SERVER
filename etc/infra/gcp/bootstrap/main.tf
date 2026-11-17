@@ -244,6 +244,17 @@ resource "google_secret_manager_secret_iam_member" "github_deployer_dev_revision
   member    = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
+# The Secret Manager data source first reads version metadata, then accesses
+# the value. Secret Accessor grants the latter; Secret Manager Viewer grants
+# the former without adding access to any additional secret values.
+resource "google_secret_manager_secret_iam_member" "github_deployer_dev_revision_viewer" {
+  for_each = local.dev_revision_visible_secret_ids
+
+  secret_id = google_secret_manager_secret.runtime[each.value].id
+  role      = "roles/secretmanager.viewer"
+  member    = "serviceAccount:${google_service_account.github_deployer.email}"
+}
+
 # These values are generated once and retained in Terraform state. Keep the
 # state bucket private because it contains the generated credentials.
 resource "random_password" "cloud_sql_app" {
