@@ -125,6 +125,10 @@
 
 다음 작업 또는 미결정 사항
 ----------------------------
+- **다음 우선 작업: 운영 준비.** dev Cloud Run·Cloud SQL·R2 조합에서 Android 실기기 로그인,
+  사진 업로드·조회·삭제, FCM, 통화·채팅을 처음부터 끝까지 검증한다. 이어서 `staging` branch와
+  Environment, `mohano-storage-staging` bucket, 해당 환경의 외부 설정을 구성한다. `main`→prod는
+  GitHub 승인 규칙, 공개 API domain/DNS, OAuth redirect URL과 production CORS가 확정된 뒤에만 연다.
 - GCP billing budget, Cloud SQL CPU/connection/storage, Cloud Run 오류율과 Secret Manager 접근을
   알림으로 설정한다.
 - GitHub `dev`, `staging`, `prod` Environment별 외부 설정 Variables를 등록한다. 환경별 deploy WIF

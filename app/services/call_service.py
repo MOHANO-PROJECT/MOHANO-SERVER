@@ -50,7 +50,15 @@ class CallService:
             raise ServiceError(
                 "candidate_not_found", "Candidate not found", 404
             ) from error
-        if not self._availability_repository.is_contactable(payload.candidate_id):
+        if self._repository.is_user_in_active_session(user_id):
+            raise ServiceError(
+                "caller_busy", "You are already in a call.", 409
+            )
+        if self._repository.is_user_in_active_session(payload.candidate_id):
+            raise ServiceError(
+                "candidate_busy", "This person is currently on a call.", 409
+            )
+        if not self._availability_repository.is_eligible_for_call(payload.candidate_id):
             raise ServiceError(
                 "candidate_unavailable", "This person is not available right now.", 409
             )

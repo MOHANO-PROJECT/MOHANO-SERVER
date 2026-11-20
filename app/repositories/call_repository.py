@@ -3,12 +3,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from app.core.errors import ServiceError
 from app.core.security import as_utc, utc_now
 from app.db.session import SessionLocal
 from app.models.matching import CallRequestRecord, CallSessionRecord, CallSignalRecord
+from app.models.user import User
 
 
 @dataclass(frozen=True)
@@ -45,12 +46,16 @@ class CallRepository:
     """MySQL persistence for call requests, connection sessions, and SDP/ICE signals."""
 
     # A notification may need a few seconds to reach a backgrounded device and
-    # for the recipient to open it. Keep an invitation valid for 14 seconds,
-    # matching the app's four-second sending state plus 10-second reply window.
+    # for the recipient to open it. Keep an invitation valid for 15 seconds,
+    # matching the app's five-second sending state plus 10-second reply window.
     # The shared deadline prevents a late acceptance from creating a one-sided
     # call session.
-    request_timeout = timedelta(seconds=14)
-    session_timeout = timedelta(minutes=10)
+    request_timeout = timedelta(seconds=15)
+    # The session expiry is the authoritative maximum duration for a call.
+    # Clients also end their local WebRTC connection at the same 30-minute
+    # limit so an already-established peer connection is not left running
+    # until its next signaling poll.
+    session_timeout = timedelta(minutes=30)
     signal_timeout = timedelta(minutes=10)
 
     def create_request(self, requester_id: str, recipient_id: str) -> StoredCallRequest:
@@ -63,6 +68,10 @@ class CallRepository:
             session.add(record)
             session.flush()
             return self._request_state(session, record)
+
+    def is_user_in_active_session(self, user_id: str) -> bool:
+        with SessionLocal() as session:
+            return self._has_active_session(session, user_id)
 
     def list_inbox(
         self, user_id: str, cursor: Optional[str], *, limit: int = 20
@@ -107,6 +116,27 @@ class CallRepository:
                 raise ServiceError(
                     "call_request_not_pending",
                     "Call request is no longer pending",
+                    409,
+                )
+            # Lock both participants in a stable order. Two different pending
+            # requests can otherwise be accepted concurrently and create two
+            # sessions for the same requester or recipient.
+            session.scalars(
+                select(User)
+                .where(User.id.in_((record.requester_id, record.recipient_id)))
+                .order_by(User.id)
+                .with_for_update()
+            ).all()
+            if self._has_active_session(session, user_id):
+                raise ServiceError(
+                    "call_recipient_busy",
+                    "This person is currently on a call.",
+                    409,
+                )
+            if self._has_active_session(session, record.requester_id):
+                raise ServiceError(
+                    "call_requester_busy",
+                    "The caller is currently on a call.",
                     409,
                 )
             call_session = CallSessionRecord(
@@ -265,6 +295,22 @@ class CallRepository:
                 "call_session_forbidden", "You cannot access this call session", 403
             )
         return record
+
+    @staticmethod
+    def _has_active_session(session, user_id: str) -> bool:
+        return (
+            session.scalar(
+                select(CallSessionRecord.id).where(
+                    CallSessionRecord.status == "connecting",
+                    CallSessionRecord.expires_at > utc_now(),
+                    or_(
+                        CallSessionRecord.requester_id == user_id,
+                        CallSessionRecord.recipient_id == user_id,
+                    ),
+                )
+            )
+            is not None
+        )
 
     def _expire_request_if_needed(self, record: CallRequestRecord) -> None:
         if (

@@ -1,14 +1,17 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, case, or_, select
 
 from app.core.security import utc_now
 from app.db.session import SessionLocal
-from app.models.matching import MatchExposureRecord, MatchPreferenceRecord
+from app.models.matching import (
+    CallSessionRecord,
+    MatchExposureRecord,
+    MatchPreferenceRecord,
+)
 from app.models.profile import Profile
 from app.models.user import User
-from app.repositories.availability_repository import AvailabilityRepository
 from app.schemas.matching import MatchPreferences
 
 
@@ -16,6 +19,12 @@ from app.schemas.matching import MatchPreferences
 class MatchExposure:
     last_shown_at: datetime
     passed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class EligibleCandidate:
+    candidate_id: str
+    delivery_priority: int
 
 
 class MatchingRepository:
@@ -38,20 +47,49 @@ class MatchingRepository:
             session.flush()
             return self._preferences(record)
 
-    def candidate_ids(self, user_id: str) -> list[str]:
+    def candidate_ids(self, user_id: str) -> list[EligibleCandidate]:
+        now = utc_now()
+        recent_foreground_since = now - timedelta(minutes=5)
+        delivery_priority = case(
+            (User.last_active_at >= recent_foreground_since, 0),
+            (
+                and_(
+                    User.call_notifications_enabled.is_(True),
+                    User.push_token.is_not(None),
+                    User.push_token != "",
+                ),
+                1,
+            ),
+            else_=2,
+        ).label("delivery_priority")
+        active_call_exists = (
+            select(CallSessionRecord.id)
+            .where(
+                CallSessionRecord.status == "connecting",
+                CallSessionRecord.expires_at > now,
+                or_(
+                    CallSessionRecord.requester_id == Profile.user_id,
+                    CallSessionRecord.recipient_id == Profile.user_id,
+                ),
+            )
+            .exists()
+        )
         with SessionLocal() as session:
             statement = (
-                select(Profile.user_id)
+                select(Profile.user_id, delivery_priority)
                 .join(User, User.id == Profile.user_id)
                 .where(
                     Profile.user_id != user_id,
                     Profile.onboarding_completed.is_(True),
                     User.status.in_(("active", "seed")),
-                    or_(User.restricted_until.is_(None), User.restricted_until <= utc_now()),
-                    AvailabilityRepository.contactable_clause(),
+                    or_(User.restricted_until.is_(None), User.restricted_until <= now),
+                    ~active_call_exists,
                 )
             )
-            return list(session.scalars(statement))
+            return [
+                EligibleCandidate(candidate_id=candidate_id, delivery_priority=int(priority))
+                for candidate_id, priority in session.execute(statement)
+            ]
 
     def exposures_for(self, viewer_id: str) -> dict[str, MatchExposure]:
         with SessionLocal() as session:
@@ -102,7 +140,6 @@ class MatchingRepository:
                     Profile.onboarding_completed.is_(True),
                     User.status.in_(("active", "seed")),
                     or_(User.restricted_until.is_(None), User.restricted_until <= utc_now()),
-                    AvailabilityRepository.contactable_clause(),
                 )
             )
             if eligible is None:

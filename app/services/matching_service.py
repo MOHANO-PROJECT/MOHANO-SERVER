@@ -35,7 +35,10 @@ class MatchingService:
         preferences = self.get_preferences(user_id)
         exposures = self._repository.exposures_for(user_id)
         candidates: list[MatchCandidate] = []
-        for candidate_id in self._repository.candidate_ids(user_id):
+        delivery_priorities: dict[str, int] = {}
+        for candidate in self._repository.candidate_ids(user_id):
+            candidate_id = candidate.candidate_id
+            delivery_priorities[candidate_id] = candidate.delivery_priority
             # Public profiles intentionally omit a hidden age. Matching must
             # still use the private, calculated age stored for that profile.
             matching_profile = self._profile_service.get_profile(candidate_id)
@@ -58,6 +61,7 @@ class MatchingService:
                 candidate.candidate_id,
                 exposures.get(candidate.candidate_id),
                 today,
+                delivery_priorities.get(candidate.candidate_id, 2),
             )
         )
         if cursor:
@@ -91,12 +95,19 @@ class MatchingService:
         candidate_id: str,
         exposure: MatchExposure | None,
         today: date,
-    ) -> tuple[int, float, bytes]:
+        delivery_priority: int,
+    ) -> tuple[int, float, int, bytes]:
         if exposure is None:
-            return (0, 0.0, self._daily_sort_key(user_id, candidate_id, today))
+            return (
+                0,
+                0.0,
+                delivery_priority,
+                self._daily_sort_key(user_id, candidate_id, today),
+            )
         return (
             1,
             as_utc(exposure.last_shown_at).timestamp(),
+            delivery_priority,
             self._daily_sort_key(user_id, candidate_id, today),
         )
 

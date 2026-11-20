@@ -3,30 +3,30 @@
 
 목적
 ----
-통화 신청을 받을 가능성이 있는 사용자만 매칭 후보로 보여, 응답 없는 신청을 줄인다.
+통화 초대를 전달할 수 있게 하되, OS 알림 권한·token·foreground 상태 때문에 정상 사용자가
+매칭 후보에서 사라지지 않게 한다.
 
 확정한 조건
 ------------
-- 앱이 foreground 상태에서 45초 간격으로 heartbeat를 보낸다. 서버는 마지막 heartbeat가 90초
-  이내면 온라인으로 판단한다.
-- 오프라인 사용자도 통화 알림 수신에 동의했고 FCM/APNs token이 등록되어 있으면 후보가 될 수 있다.
-- 둘 다 만족하지 않으면 후보 조회와 통화 신청 대상에서 제외한다.
-- 알림 동의만 있고 token이 없거나, token만 있고 동의가 없으면 후보로 노출하지 않는다.
+- 앱은 home 진입, foreground 복귀, background 전환, 로그아웃 때만 `is_foreground`를 한 번씩
+  갱신한다. timer·polling·heartbeat는 사용하지 않는다.
+- 알림 권한, FCM/APNs token, foreground 상태와 무관하게 완료한 프로필을 가진 정상 계정은 후보가 된다.
+- 최근 foreground 상태, 통화 알림 동의, 유효한 token은 같은 노출 이력 안에서 응답 가능성이 높은
+  사용자를 먼저 제안하기 위한 내부 우선순위일 뿐, 후보 제외 조건이 아니다.
 
 API
 ---
-- `GET /v1/me/availability`
-- `POST /v1/me/availability/heartbeat`
+- `PUT /v1/me/availability/presence`
 - `PUT /v1/me/availability`
 
 구현 상태와 다음 작업
 ----------------------
 - MySQL users에 `last_active_at`, `call_notifications_enabled`, `push_token`을 저장한다.
-- 매칭 후보 조회와 통화 신청 생성 모두 같은 가용성 조건을 검사한다.
-- Flutter 앱은 home 상태에서 foreground heartbeat를 전송한다.
+- 매칭 후보 조회는 정상 계정을 모두 포함하고, 통화 신청 생성은 계정 상태·제한·온보딩 완료만 다시 검사한다.
+- Flutter 앱은 lifecycle 변화에서만 foreground presence를 단발성으로 전송한다.
 - Android FCM은 Flutter가 OS 권한 허용 뒤 token을 등록·갱신·로그아웃 해제하고, 서버는 통화 신청과
   새 채팅 메시지에 event type과 opaque ID만 발송하도록 연결했다. 실패한 unregistered token은 서버가
-  자동 해제한다. 통화 신청 알림은 서버 요청과 같은 14초 TTL을 설정해 만료된 초대가 나중에 표시되지
+  자동 해제한다. 통화 신청 알림은 서버 요청과 같은 15초 TTL을 설정해 만료된 초대가 나중에 표시되지
   않게 한다. 앱 언어(`en`·`ja`·`ko`)도 token과 함께 저장해 수신자 언어에 맞는 알림 문구를 보낸다.
   Android는 통화 초대용 `IMPORTANCE_HIGH` 채널과 메시지용 기본 중요도 채널을 분리해, 통화 초대는
   헤드업 알림으로 표시할 수 있게 한다. token은 로그·공개 API 응답에 포함하지 않는다.
@@ -34,3 +34,22 @@ API
   서버 발송과 Android 실기기 알림 수신은 확인했다. 운영 환경의 credential 배포 방식, 여러 기기 token
   저장, 전달 실패/지연 모니터링은 남아 있다. iOS APNs provider 설정은 Apple Developer Program 준비 뒤
   별도 연결한다.
+
+재방문 유도 (후속 작업)
+------------------------
+- 목적: 앱이 주기적으로 “살아 있음”을 보내게 하지 않고, 장기간 foreground 신호가 없는 사용자에게
+  제한된 횟수의 FCM/APNs를 보내 앱 재방문과 단발성 `is_foreground=true` 이벤트를 유도한다.
+- 기준: 마지막 foreground 전환 이후 3일, 7일, 14일에 각각 최대 한 번만 발송한다. 동일한 비활성
+  기간에는 같은 단계의 중복 발송을 막고, 앱을 foreground로 연 사용자는 다음 비활성 기간이 시작될
+  때까지 이 캠페인에서 제외한다.
+- 3일 문구 후보: “회원님 주변에 새로운 인기 회원이 가입했어요!” 실제 신규 사용자·주변 범위의
+  근거를 계산할 수 있을 때만 사용하고, 그렇지 않으면 사실을 단정하지 않는 문구로 대체한다.
+- 7일 문구 후보: “회원님의 프로필 노출이 곧 일시중지됩니다. 지금 접속해서 프로필을 유지하세요.”
+  실제 노출 일시중지 정책과 기준일을 먼저 확정하고, 서버가 그 정책을 적용할 때만 발송한다.
+- 14일 문구 후보: “회원님을 기다리는 3명의 호감 표시가 도착해 있어요.” 현재 MOHANO에는 호감
+  표시 기능·데이터가 없으므로 구현하지 않으며, 해당 기능과 검증 가능한 수치를 도입한 뒤에만 사용한다.
+- 대상은 유효한 push token과 OS 알림 수신 상태가 확인된 사용자로 한정한다. 알림 해제·token 만료·계정
+  삭제·이용 제한 사용자는 제외하고, FCM `Unregistered` 실패 시 기존 token 폐기 규칙을 따른다.
+- 구현 전에는 server scheduler(예: Cloud Scheduler가 인증된 Cloud Run job을 하루 1회 호출),
+  campaign 이력 테이블, 사용자별 수신 거부·빈도 제한, locale별 문구, 전송 성공/실패 관측 및
+  개인정보처리방침·스토어 선언 갱신을 확정한다.

@@ -135,9 +135,9 @@ class PushNotificationService:
         is_call_invitation = event_type == "incoming_call"
         return messaging.AndroidConfig(
             priority="high",
-            # A call invitation is actionable for only 14 seconds. Do not let
+            # A call invitation is actionable for only 15 seconds. Do not let
             # Android surface it after the server has expired the request.
-            ttl=timedelta(seconds=14) if is_call_invitation else timedelta(hours=1),
+            ttl=timedelta(seconds=15) if is_call_invitation else timedelta(hours=1),
             notification=messaging.AndroidNotification(
                 channel_id=(
                     "mohano_call_requests"

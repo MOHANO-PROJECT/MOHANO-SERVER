@@ -11,15 +11,18 @@ P2P 음성 통화 signaling
 - `MOHANO-SERVER`는 음성 스트림을 수신·저장·중계하지 않는다.
 - 통화 전후 제어는 call request와 call session REST API로 처리한다.
 - SDP offer/answer와 ICE 후보만 짧은 만료 시간을 둔 REST signaling 데이터로 저장한다.
-- 통화 중 양쪽 앱은 짧은 polling으로 상대 신호를 읽는다. WebSocket은 사용하지 않는다.
+- WebRTC 연결 전 양쪽 앱은 짧은 polling으로 SDP/ICE 신호를 읽는다. 연결 뒤의 정상 종료는 P2P
+  Data Channel으로 직접 전달하며, WebSocket은 사용하지 않는다.
 - call session 참여자만 해당 signal을 읽거나 쓸 수 있다.
 - P2P 연결 불가 네트워크에서는 우선 실패를 안내한다. TURN relay는 별도 결정 전에는 넣지 않는다.
+- 한 사용자는 동시에 하나의 유효한 `connecting` call session에만 참여할 수 있다. 수락 시 두 참여자의
+  user row를 ID 순서로 잠가 경쟁하는 두 수락이 별도 session을 만들지 못하게 한다.
 
 API와 데이터 요구사항
 ----------------------
 - `GET /v1/call-sessions/{session_id}`
 - `POST /v1/call-sessions/{session_id}/signals`
-- `GET /v1/call-sessions/{session_id}/signals?after={cursor}`
+- `GET /v1/call-sessions/{session_id}/signals?after={cursor}` (연결 전 SDP/ICE 교환용)
 - `POST /v1/call-sessions/{session_id}/end`
 - call_sessions, call_signals 테이블
 - call_signals에는 sender, type(offer/answer/ice), payload, expires_at, cursor를 둔다.
@@ -30,20 +33,31 @@ API와 데이터 요구사항
 현재 구현 상태
 --------------
 - `CallRepository`가 call request, call session, SDP/ICE signal을 MySQL에 영속한다.
-- 통화 신청은 생성 후 14초가 지나면 `expired`로 전환한다. 발신 앱은 처음 4초간 신청 중 상태를 보여 준 뒤
-  남은 10초를 응답 대기 상태로 보여 준다. 연결 session과 signal은 10분으로 제한하며,
-  signal polling 시 만료 signal을 삭제하고 만료 session은 `expired`로 전환한다.
+- 통화 신청은 생성 후 15초가 지나면 `expired`로 전환한다. 발신 앱은 처음 2.5초의 "통화 준비"와
+  다음 2.5초의 "전화 걸기" 전환 화면을 보여 준 뒤 남은 10초를 응답 대기 상태로 보여 준다. 응답 상태는
+  2초마다 확인해 신청 한 건당 최대 5회 조회한다. 연결 session은 30분, SDP/ICE signal은 10분으로 제한하며,
+  signal polling 시 만료 signal을 삭제하고 만료 session은 `expired`로 전환한다. 현재 구독 entitlement는
+  미구현이므로 이 상한은 모든 통화에 적용한다.
 - 요청 수락·거절·취소, session 조회·종료, signal 송수신은 모두 요청자·수신자 두 참여자만 수행할 수 있다.
   service는 음성 payload를 받지 않으며, signal은 offer/answer/ICE JSON만 보관한다.
+- 통화 중인 사용자는 매칭 후보에서 제외한다. 이미 표시된 후보가 그 뒤 다른 통화에 들어간 경우에는
+  새 통화 신청을 `candidate_busy`로 거절한다. 수신자가 다른 요청을 수락하려는 경쟁 상황은
+  `call_recipient_busy`로, 발신자가 다른 요청으로 통화에 들어간 경쟁 상황은 `call_requester_busy`로
+  거절한다.
+- 연결 뒤 앱이 종료하면 먼저 Data Channel으로 `hangup`을 상대 앱에 직접 전달하고, 두 앱은 각각
+  `POST /v1/call-sessions/{session_id}/end`를 한 번 호출한다. Data Channel 메시지를 받지 못한
+  예외 상황에서만 WebRTC 연결 단절 상태를 계기로 `GET /v1/call-sessions/{session_id}`를 한 번
+  조회한다.
 
 흐름
 ----
 1. 요청자가 후보에게 통화 신청을 생성한다.
-2. 상대가 수락하면 서버가 짧게 만료되는 call session을 만들고, 두 사용자 채팅에 통화 연결
+2. 상대가 수락하면 서버가 30분 뒤 만료되는 call session을 만들고, 두 사용자 채팅에 통화 연결
    시스템 이벤트를 남긴다.
 3. 두 앱은 REST API로 SDP·ICE 신호를 교환한다.
-4. WebRTC 연결 후 음성은 두 앱 사이에서 직접 흐른다.
-5. 종료·만료 시 call session과 signal을 정리한다.
+4. WebRTC 연결 후 음성과 `hangup` 제어 메시지는 두 앱 사이에서 직접 흐른다.
+5. 정상 종료 시 양쪽 앱이 server session 종료를 기록한다. Data Channel 전달 실패나 연결 단절 때만
+   server session을 단발성으로 확인한 뒤 종료·만료를 정리한다.
 
 다음 작업 또는 미결정 사항
 ----------------------------

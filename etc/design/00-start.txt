@@ -18,7 +18,9 @@ repository로 영속화했다. 매칭 조건·통화·채팅 API는 아직 더�
 - Redis는 초기 범위에 넣지 않는다.
 - 채팅은 실시간 연결 없이 REST로 저장하고, 화면 진입 또는 사용자 새로고침 시 조회한다.
 - 음성 미디어는 WebRTC P2P로 이용자끼리 직접 전송한다. 서버는 미디어 relay를 하지 않는다.
-- 서버는 통화 신청과 짧게 만료되는 SDP·ICE signaling 데이터만 REST polling으로 전달한다.
+- 서버는 통화 신청과 연결 전의 짧게 만료되는 SDP·ICE signaling 데이터만 REST polling으로 전달한다.
+  WebRTC 연결 뒤의 정상 종료 알림은 P2P Data Channel으로 직접 전달하고, server는 종료 상태 기록과
+  예외적인 연결 단절에서의 단발성 session 확인만 처리한다.
 - 로컬 개발용 MySQL과 Silo(MinIO 호환) Docker 구성을 `etc/infra`에 둔다. 사진 object storage는
   로컬에서 Silo, 운영에서 Cloudflare R2를 사용하되 S3 호환 API 계약을 유지한다. 운영 API·DB는
   Cloud Run(FastAPI 컨테이너)과 Cloud SQL(MySQL)을 사용하고, Terraform은 리소스 정의까지만
@@ -62,7 +64,9 @@ repository로 영속화했다. 매칭 조건·통화·채팅 API는 아직 더�
 
 03. Matching MySQL 전환 (진행 중)
 - `MatchingService`의 조건 저장과 후보 조회는 MySQL repository로 전환했다. 완료한 프로필과
-  활성 사용자만 후보로 조회하고, 본인·탈퇴·온보딩 미완료 사용자는 제외한다.
+  정상 계정은 알림 권한·FCM token·foreground 상태와 무관하게 후보로 조회하고, 본인·탈퇴·온보딩
+  미완료 사용자는 제외한다. 최근 foreground 상태와 유효한 통화 알림 token은 같은 노출 이력 안에서
+  응답 가능성이 높은 사용자를 우선 정렬하는 기준일 뿐, 후보 제외 조건은 아니다.
 - 로컬 환경에서는 기존 4명과 생성형 96명을 합친 100명의 `seed` 후보를 자동으로 만든다.
   각 후보는 국가·성별·연령·언어·MBTI·관심사·소개를 가지며, 운영 환경에서는 생성하지 않는다.
 - 후보 필터는 1인칭 기준이다. 내 국가·성별·연령 조건만 적용하며, 상대방의 조건은 확인하지 않는다.
@@ -71,6 +75,8 @@ repository로 영속화했다. 매칭 조건·통화·채팅 API는 아직 더�
 - `match_exposures`에 노출·패스 이력을 저장하고 `POST /v1/matches/candidates/{candidate_id}/pass`로
   패스를 기록한다. 패스는 영구 제외가 아니므로 다음 배치에 다시 노출될 수 있다. 좋아요·상호 매칭은 현재 도입하지 않는다. 통화 요청의 상태
   영속화와 signaling은 05. Voice signaling 완성 범위에서 MySQL로 전환한다.
+- 유효한 통화 session에 참여 중인 사용자는 후보에서 제외한다. 후보 카드가 표시된 뒤 상대가 다른
+  통화를 먼저 시작하면 신청 생성은 `candidate_busy`로 거절하고, 클라이언트는 상대가 통화 중임을 안내한다.
 
 04. Chat MySQL 전환
 완료
@@ -80,9 +86,13 @@ repository로 영속화했다. 매칭 조건·통화·채팅 API는 아직 더�
 
 05. Voice signaling 완성
 완료
-- 통화 요청 수락·거절·취소와 P2P SDP/ICE signal polling을 MySQL 기반으로 전환했다.
-- 신청은 14초, 연결 session과 signal은 현재 10분 뒤 만료 처리하며, 참여자 권한과 통화 종료를 DB 기준으로 검증한다.
-  무료·구독 통화 시간 정책은 08. 광고·구독 수익화에서 변경 예정이다.
+- 통화 요청 수락·거절·취소와 연결 전 P2P SDP/ICE signal polling을 MySQL 기반으로 전환했다.
+  연결 뒤에는 Data Channel으로 종료를 직접 전달하며, WebRTC 연결 단절 때만 session 상태를 한 번
+  확인한다.
+- 신청은 15초(5초 발신 전환 화면 + 10초 응답 대기), 연결 session은 30분 뒤 만료 처리하며,
+  참여자 권한과 통화 종료를 DB 기준으로 검증한다.
+  SDP/ICE signal은 10분 뒤 만료 처리한다. 현재는 구독 entitlement가 아직 없으므로 모든 통화에 30분
+  상한을 적용하며, 구독자 예외는 08. 광고·구독 수익화 구현 시 추가한다.
   서버는 오디오를 relay하지 않는다.
 - P2P 실패 뒤 TURN 도입 여부는 실기기 검증 결과를 보고 결정한다.
 
@@ -90,10 +100,14 @@ repository로 영속화했다. 매칭 조건·통화·채팅 API는 아직 더�
 - Android FCM token 등록/폐기와 통화·새 메시지 전달 코드를 추가했다. Firebase Console Android
   설정과 서버 service-account credential을 넣은 실기기 검증이 남아 있다. iOS APNs 전달은
   Apple Developer 설정 이후 추가한다.
-- 매칭 후보는 foreground heartbeat로 판단한 온라인 사용자 또는 통화 알림 동의와 유효한
-  device token을 모두 가진 사용자로 제한한다. heartbeat·동의·token 저장 API와 매칭 필터는
-  구현했다. Android FCM 발송 코드는 provider credential을 넣으면 동작하며, iOS APNs 발송은
-  Apple provider 설정 뒤 추가한다.
+- 매칭 후보는 통화 알림 권한·device token·foreground 상태로 제한하지 않는다. 앱은 로그인·home 진입·
+  foreground 복귀·background 전환 때만 단발성 presence를 갱신하며, 서버는 최근 foreground 상태와
+  유효한 통화 알림 token을 후보 정렬의 내부 우선순위로만 사용한다. Android FCM 발송 코드는 provider
+  credential을 넣으면 동작하며, iOS APNs 발송은 Apple provider 설정 뒤 추가한다.
+- 재방문 유도는 별도 후속 작업으로 둔다. 장기간 foreground 신호가 없는 사용자를 후보에서 즉시
+  제외하기보다, 3일·7일·14일 경과 시 FCM/APNs를 한 번씩 보내 앱을 열어 `is_foreground=true`를
+  다시 보고할 기회를 준다. 알림 미허용 사용자에게는 발송하지 않으며, 재방문 알림 발송 여부는 후보
+  자격과 분리한다.
 - 차단, 신고, 정책 동의, 성인 확인, 계정 삭제 API와 운영 데이터 보존 정책을 정의한다.
 - 온보딩은 프로필 정보 확인 뒤 필수 정책 동의를 받는다. 현재 버전의 이용약관, 개인정보 처리방침,
   커뮤니티 가이드라인, 만 15세 이상 확인은 동의 시각·표시 언어와 함께 MySQL에 이력으로 저장하고,
@@ -104,7 +118,7 @@ repository로 영속화했다. 매칭 조건·통화·채팅 API는 아직 더�
   조치 이력을 보존한다.
 - 신고자는 최근 24시간에 최대 5건만 제출할 수 있고, 같은 대상의 최근 24시간 중복 신고는 거절한다.
   서로 다른 신고자 3명 이상이 같은 사용자를 최근 24시간에 신고하면 해당 계정은 24시간 자동 제한한다.
-  제한 중에도 로그인·프로필·설정은 가능하지만 매칭·채팅·통화와 online heartbeat는 서버에서 차단한다.
+  제한 중에도 로그인·프로필·설정은 가능하지만 매칭·채팅·통화와 availability presence 갱신은 서버에서 차단한다.
   자동 제한 시 pending 통화 요청을 취소하고 진행 중 통화 세션을 종료한다.
 - 운영자 페이지는 현재 범위에 넣지 않는다. 추후 운영자는 신고 사유·선택 증거·신고자·피신고자·처리 상태와
   자동 정지 이력을 검색·열람할 수 있어야 하며, 수동 제한/해제·콘텐츠 숨김 조치에는 조치자·사유·시각을 남긴다.

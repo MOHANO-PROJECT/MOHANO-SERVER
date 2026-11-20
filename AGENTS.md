@@ -32,8 +32,10 @@ Flutter 화면은 `MOHANO-APP/etc/design/`을 참고하되, 서버의 설계 기
    사용자의 새로고침 때 REST API로 조회한다.
 2. 음성은 WebRTC P2P로 두 이용자가 직접 전송한다. 서버는 오디오를 수신·저장·중계하지
    않는다.
-3. 서버는 인증된 두 참여자의 call request와 짧게 만료되는 SDP·ICE 신호만 REST polling으로
-   전달한다. 신호 payload와 call session은 허가된 참여자만 읽거나 쓸 수 있어야 한다.
+3. 서버는 인증된 두 참여자의 call request와 연결 전 SDP·ICE 신호만 REST polling으로 전달한다.
+   연결 뒤의 정상적인 통화 종료 알림은 WebRTC P2P Data Channel으로 직접 전달하며, server는
+   session 종료 기록과 예외적인 연결 단절의 단발성 상태 확인만 처리한다. 신호 payload와 call
+   session은 허가된 참여자만 읽거나 쓸 수 있어야 한다.
 4. P2P 직결 실패에 대한 TURN relay 도입은 별도 사용자 결정 전에는 구현하지 않는다.
 
 ## API 및 보안 규칙
