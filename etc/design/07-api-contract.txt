@@ -71,6 +71,7 @@ S3 호환 storage의 완료·임시 사진, 연결 identity, refresh session, �
 | 구현됨 | POST | `/v1/me/policy-consents` | 필수 정책 동의를 동의 이력으로 저장하고 온보딩 완료 |
 | 구현됨 | GET | `/v1/me/advertising-consent` | 현재 광고 개인화 선택 조회. 이력이 없으면 204 |
 | 구현됨 | PUT | `/v1/me/advertising-consent` | 맞춤형 광고 또는 일반 광고 선택을 이력으로 저장 |
+| 구현됨 | GET | `/v1/me/monetization` | 현재 구독 entitlement와 광고 게이트 상태 조회 |
 | 구현됨 | POST | `/v1/me/profile/photos/upload-requests` | MIME·크기를 검증하고 10분 PUT URL 발급 |
 | 구현됨 | POST | `/v1/me/profile/photos/upload-requests/{upload_id}/complete` | staging object 검증·승격 후 DB 참조 저장 |
 | 구현됨 | DELETE | `/v1/me/profile/photos/{photo_id}` | storage object와 사진 참조 삭제 |
@@ -106,12 +107,17 @@ false이면 매칭에는 연령을 계속 사용하지만 공개 프로필의 ag
 | 구현됨 | GET | `/v1/me/match-preferences` | 현재 조건 조회 |
 | 구현됨 | PUT | `/v1/me/match-preferences` | 국가·성별·연령대 조건 전체 저장 |
 | 구현됨 | GET | `/v1/matches/candidates?limit=` | 내 조건으로 필터링한 최대 10명 후보 배치 조회. 미노출 후보 우선, 이후 가장 오래 전에 본 후보 우선 |
+| 개발 단계 | POST | `/v1/matches/candidates/advertising-gate/complete` | 후보 다음 배치를 위한 개발용 광고 게이트 완료 기록 |
 | 구현됨 | POST | `/v1/matches/candidates/{candidate_id}/pass` | 후보 패스 이력 저장. 후보를 영구 제외하지 않으므로 이후 배치에 재노출될 수 있음 |
 
 후보 응답에는 후보 ID, 표시용 nickname, 연령(비공개 설정 시 null), 국가, 가능한 언어, MBTI, 관심사,
 소개, 대표 사진 참조값만 넣는다. 후보 점수, 차단·신고 기록과 내부 user ID는 반환하지 않는다.
 유효한 `connecting` call session(`expires_at`이 현재 시각보다 뒤)에 참여 중인 사용자는 후보 응답에서
 제외한다. 카드를 받은 뒤 상대의 상태가 바뀔 수 있으므로 통화 신청 시에도 다시 확인한다.
+
+무료 사용자는 현지 날짜 기준 첫 후보 배치만 광고 없이 조회한다. 이후 배치는
+`409/advertising_gate_required`를 받고 개발 단계의 complete API 뒤 다시 조회한다. 활성 Plus entitlement는
+이 게이트를 건너뛴다. 실제 운영에서는 complete API를 광고 SDK의 유효한 완료 callback으로 교체한다.
 
 4. 통화 신청과 P2P 연결 제어
 
@@ -146,9 +152,15 @@ false이면 매칭에는 연령을 계속 사용하지만 공개 프로필의 ag
 | MySQL | GET | `/v1/chats/{chat_id}/messages?before=` | 과거 메시지 cursor 조회 |
 | MySQL | POST | `/v1/chats/{chat_id}/messages` | 텍스트 메시지 저장 |
 | MySQL | POST | `/v1/chats/{chat_id}/read` | 마지막으로 읽은 메시지 갱신 |
+| 구현됨 | GET | `/v1/chats/{chat_id}/monetization` | 해당 대화의 오늘 광고 게이트·남은 무료 메시지 상태 조회 |
+| 개발 단계 | POST | `/v1/chats/{chat_id}/advertising-gate/complete` | 대화 시작 또는 다음 10건용 개발 광고 게이트 완료 기록 |
 
 대화방은 통화가 수락된 두 사용자에게만 열리는 것으로 시작한다. 화면 진입과 사용자의
 새로고침에서만 조회하며 WebSocket, push, 자동 polling은 MVP에 넣지 않는다.
+
+무료 사용자는 상대별·현지 날짜별 첫 대화 시작 전에 광고 게이트를 완료해야 하며, 이후 발신 메시지
+10건마다 다음 10건용 게이트가 필요하다. 메시지 전송 API는 게이트가 남아 있으면
+`409/advertising_gate_required`를 반환한다. Plus entitlement는 메시지 게이트를 건너뛴다.
 
 공개 전 필수 후순위
 -------------------

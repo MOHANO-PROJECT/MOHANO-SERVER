@@ -11,6 +11,8 @@ from app.schemas.chats import (
 )
 from app.services.database_profile_service import DatabaseProfileService
 from app.services.push_notification_service import PushNotificationService
+from app.services.monetization_service import MonetizationService
+from app.schemas.monetization import ChatMonetizationStatus
 
 
 class ChatService:
@@ -21,10 +23,12 @@ class ChatService:
         repository: ChatRepository,
         profile_service: DatabaseProfileService,
         push_notifications: PushNotificationService,
+        monetization_service: MonetizationService,
     ) -> None:
         self._repository = repository
         self._profile_service = profile_service
         self._push_notifications = push_notifications
+        self._monetization_service = monetization_service
 
     def list_chats(self, user_id: str, cursor: Optional[str]) -> ChatListResponse:
         self._ensure_demo_chat(user_id)
@@ -53,12 +57,24 @@ class ChatService:
         text = payload.text.strip()
         if not text:
             raise ServiceError("message_empty", "Message cannot be empty", 422)
+        self._repository.counterpart_id(user_id, chat_id)
+        self._monetization_service.consume_chat_message(user_id, chat_id)
         message = self._repository.create_message(user_id, chat_id, text)
         self._push_notifications.send_chat_message(
             recipient_id=self._repository.counterpart_id(user_id, chat_id),
             chat_id=chat_id,
         )
         return self._message_response(user_id, message)
+
+    def monetization_status(self, user_id: str, chat_id: str) -> ChatMonetizationStatus:
+        self._repository.counterpart_id(user_id, chat_id)
+        return self._monetization_service.chat_status(user_id, chat_id)
+
+    def complete_monetization_gate(
+        self, user_id: str, chat_id: str
+    ) -> ChatMonetizationStatus:
+        self._repository.counterpart_id(user_id, chat_id)
+        return self._monetization_service.complete_chat_gate(user_id, chat_id)
 
     def mark_read(self, user_id: str, chat_id: str) -> None:
         self._repository.mark_read(user_id, chat_id)

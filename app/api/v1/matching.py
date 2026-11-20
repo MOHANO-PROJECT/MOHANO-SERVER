@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_current_interaction_user_id
 from app.schemas.matching import CandidateListResponse, MatchPreferences, MatchPreferencesUpdateRequest
-from app.services.container import get_matching_service
+from app.schemas.monetization import CandidateBatchMonetizationStatus
+from app.services.container import get_matching_service, get_monetization_service
 from app.services.matching_service import MatchingService
+from app.services.monetization_service import MonetizationService
 
 router = APIRouter()
 
@@ -35,6 +37,17 @@ def list_match_candidates(
     service: MatchingService = Depends(get_matching_service),
 ) -> CandidateListResponse:
     return service.list_candidates(user_id, limit, cursor)
+
+
+@router.post(
+    "/matches/candidates/advertising-gate/complete",
+    response_model=CandidateBatchMonetizationStatus,
+)
+def complete_candidate_advertising_gate(
+    user_id: str = Depends(get_current_interaction_user_id),
+    service: MonetizationService = Depends(get_monetization_service),
+) -> CandidateBatchMonetizationStatus:
+    return service.complete_candidate_gate(user_id)
 
 
 @router.post("/matches/candidates/{candidate_id}/pass", status_code=204)

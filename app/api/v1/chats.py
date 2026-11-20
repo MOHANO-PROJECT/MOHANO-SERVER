@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Response, status
 
 from app.api.deps import get_current_interaction_user_id
 from app.schemas.chats import ChatListResponse, ChatMessage, MessageCreateRequest, MessageListResponse
+from app.schemas.monetization import ChatMonetizationStatus
 from app.services.chat_service import ChatService
 from app.services.container import get_chat_service
 
@@ -27,6 +28,24 @@ def list_messages(
     service: ChatService = Depends(get_chat_service),
 ) -> MessageListResponse:
     return service.list_messages(user_id, chat_id, before)
+
+
+@router.get("/{chat_id}/monetization", response_model=ChatMonetizationStatus)
+def get_chat_monetization_status(
+    chat_id: str,
+    user_id: str = Depends(get_current_interaction_user_id),
+    service: ChatService = Depends(get_chat_service),
+) -> ChatMonetizationStatus:
+    return service.monetization_status(user_id, chat_id)
+
+
+@router.post("/{chat_id}/advertising-gate/complete", response_model=ChatMonetizationStatus)
+def complete_chat_advertising_gate(
+    chat_id: str,
+    user_id: str = Depends(get_current_interaction_user_id),
+    service: ChatService = Depends(get_chat_service),
+) -> ChatMonetizationStatus:
+    return service.complete_monetization_gate(user_id, chat_id)
 
 
 @router.post("/{chat_id}/messages", response_model=ChatMessage)

@@ -8,6 +8,7 @@ from app.core.security import as_utc, utc_now
 from app.repositories.matching_repository import MatchExposure, MatchingRepository
 from app.schemas.matching import CandidateListResponse, MatchCandidate, MatchPreferences, MatchPreferencesUpdateRequest
 from app.services.database_profile_service import DatabaseProfileService
+from app.services.monetization_service import MonetizationService
 
 
 class MatchingService:
@@ -18,10 +19,12 @@ class MatchingService:
         repository: MatchingRepository,
         profile_service: DatabaseProfileService,
         daily_order_secret: str,
+        monetization_service: MonetizationService,
     ) -> None:
         self._repository = repository
         self._profile_service = profile_service
         self._daily_order_secret = daily_order_secret.encode("utf-8")
+        self._monetization_service = monetization_service
 
     def get_preferences(self, user_id: str) -> MatchPreferences:
         return self._repository.get_preferences(user_id)
@@ -72,6 +75,8 @@ class MatchingService:
             candidates = candidates[cursor_index + 1 :] if cursor_index is not None else []
 
         page = candidates[:limit]
+        if page:
+            self._monetization_service.consume_candidate_batch(user_id)
         self._repository.record_shown(user_id, [candidate.candidate_id for candidate in page])
         return CandidateListResponse(
             items=page,

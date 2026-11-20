@@ -9,6 +9,7 @@ from app.repositories.call_repository import CallRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.repositories.policy_consent_repository import PolicyConsentRepository
 from app.repositories.matching_repository import MatchingRepository
+from app.repositories.monetization_repository import MonetizationRepository
 from app.repositories.safety_repository import SafetyRepository
 from app.core.config import get_settings
 from app.services.auth_service import AuthService
@@ -22,6 +23,7 @@ from app.services.apple_identity_verifier import AppleIdentityVerifier
 from app.services.line_identity_verifier import LineIdentityVerifier
 from app.services.kakao_identity_verifier import KakaoIdentityVerifier
 from app.services.matching_service import MatchingService
+from app.services.monetization_service import MonetizationService
 from app.services.object_storage_service import ObjectStorageService
 from app.services.policy_consent_service import PolicyConsentService
 from app.services.push_notification_service import PushNotificationService
@@ -49,12 +51,16 @@ availability_repository = AvailabilityRepository()
 push_notification_service = PushNotificationService(
     get_settings(), availability_repository
 )
+monetization_service = MonetizationService(MonetizationRepository(), profile_service)
 matching_service = MatchingService(
     MatchingRepository(),
     profile_service,
     get_settings().jwt_secret_key,
+    monetization_service,
 )
-chat_service = ChatService(ChatRepository(), profile_service, push_notification_service)
+chat_service = ChatService(
+    ChatRepository(), profile_service, push_notification_service, monetization_service
+)
 call_service = CallService(
     CallRepository(),
     profile_service,
@@ -91,6 +97,10 @@ def get_advertising_consent_service() -> AdvertisingConsentService:
 
 def get_matching_service() -> MatchingService:
     return matching_service
+
+
+def get_monetization_service() -> MonetizationService:
+    return monetization_service
 
 
 def get_call_service() -> CallService:
